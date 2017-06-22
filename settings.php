@@ -37,7 +37,11 @@ if ($hassiteconfig) {
 													get_string('filescan_apiurl', 'local_filescan'),
 													get_string('filescan_apiurl_desc', 'local_filescan'),
 													'', PARAM_TEXT, 128));
-
+													
+	$settings->add(new admin_setting_configtext('filescan/numfilespercron',
+													get_string('filescan_numfilespercron', 'local_filescan'),
+													get_string('filescan_numfilespercron_desc', 'local_filescan'),
+													'5', PARAM_TEXT, 128));
 												
                                                 
 }
