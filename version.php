@@ -22,7 +22,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2017062105;
+$plugin->version   = 2017062111;
 $plugin->requires  = 2016052300;
 $plugin->component = 'local_filescan';
 $plugin->maturity  = MATURITY_ALPHA;

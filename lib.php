@@ -26,7 +26,7 @@ defined('MOODLE_INTERNAL') || die();
 
 function local_filescan_extend_navigation_course($navigation, $course, $context) {
     if (has_capability('local/filescan:scan', $context)) {
-        $url = new moodle_url('/local/filescan/index.php', array('id' => $course->id));
+        $url = new moodle_url('/local/filescan/view.php', array('courseid' => $course->id));
         $navigation->add(get_string('summaryview', 'local_filescan'), $url,
                 navigation_node::TYPE_SETTING, null, null, new pix_icon('i/download_files', 'File Scan Summary', 'local_filescan'));
     }

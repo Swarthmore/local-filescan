@@ -21,8 +21,8 @@ $tasks = array(
     array(
         'classname' => 'local_filescan\task\scan_files',
         'blocking' => 0,
-        'minute' => '0',
-        'hour' => '4',
+        'minute' => '*/5',
+        'hour' => '*',
         'day' => '*',
         'dayofweek' => '*',
         'month' => '*'

@@ -2,7 +2,13 @@
 
 namespace local_filescan\task;
 require(__DIR__.'/../../vendor/autoload.php');
+
+
+use GuzzleHttp\Pool;
 use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Request;
+
+
 
 ini_set('display_errors', 'On');
 error_reporting(E_ALL);
@@ -39,8 +45,10 @@ class scan_files extends \core\task\scheduled_task {
 		mtrace("Looking up files to scan"); 
     
 
+		$max_files_to_check = (int)get_config('filescan', 'numfilespercron');
+		$max_files_to_check = (is_int($max_files_to_check) && $max_files_to_check > 0) ? $max_files_to_check : 2;
         
-        $query = "SELECT f.id, f.filename, f.contenthash, c.instanceid, c.path 
+        $query = "SELECT distinct f.contenthash, f.pathnamehash 
         		FROM {files} f, {context} c
         		WHERE c.id = f.contextid 
         			AND c.contextlevel = 70 
@@ -48,10 +56,13 @@ class scan_files extends \core\task\scheduled_task {
         			AND f.mimetype = 'application/pdf' 
         			AND f.component != 'assignfeedback_editpdf' 
         			AND f.filearea != 'stamps'
-        		";
-
+        			AND f.contenthash NOT IN (SELECT contenthash FROM {local_filescan_files} where checked=True)
+        			ORDER BY f.timemodified DESC
+        			LIMIT " . $max_files_to_check
+        		;
+		
         $files = $DB->get_records_sql($query);
-        mtrace( print_r($files, true));
+        //mtrace( print_r($files, true));
        
         if (!$files) {
         	mtrace("No files found");
@@ -63,45 +74,90 @@ class scan_files extends \core\task\scheduled_task {
 			// Base URI is used with relative requests
 			'base_uri' => get_config('filescan', 'apiurl'),
 			// You can set any number of default request options.
-			'timeout'  => 10.0,
+			'timeout'  => 30.0,
 		]);    
     
         
-        $fs = get_file_storage();
-        foreach ($files as $f) {
-            $file = $fs->get_file_by_id($f->id);
-            mtrace("Now processing \"" . $f->filename ."\"");
-
-            $promise = $client->requestAsync('POST', '/v1/file', [
-				'multipart' => [
-					[
-						'name'     => 'upfile',
-						'contents' => $file->get_content(),
-						'filename' => $f->filename
-					]
-				]
-			]);
-			
-			
-			$promise->then(
-				function (ResponseInterface $res) {
-					$code = $response->getStatusCode();
-					$results = json_decode($response->getBody(), true);
-					if ($results['application/json']['hasText']) {
-						echo "Has text\n";
+       
+        
+        $requests = function ($files) use ($client) {
+        	 $fs = get_file_storage();
+			 foreach ($files as $f) {
+            	$file = $fs->get_file_by_hash($f->pathnamehash);
+            	yield function() use ($client, $file, $f) {
+					return $client->postAsync('/v1/file',[
+						'multipart' => [
+							[
+								'name'     => 'upfile',
+								'contents' => $file->get_content(),
+								'filename' => $f->contenthash,
+							],
+							[
+								'name'     => 'id',
+								'contents' => $f->contenthash
+							]
+						]
+					]);
+				};
+			}
+		};
+        
+        $pool = new Pool($client, $requests($files), [
+			'concurrency' => 2,
+			'fulfilled' => function ($response, $index) use ($DB) {
+					$response_code = $response->getStatusCode();
+					
+					
+					// Assume an unknown status -- correct as needed
+					// TODO: implement an incomplete entry if the conversion fails
+					$fileentry = new \stdClass();					
+					if ($response_code = 200) {
+					
+						$results = json_decode($response->getBody(), true);
+						$fileentry->contenthash = $results['application/json']['filename'];
+									
+						if ($results['application/json']['hasText']) {
+							$fileentry->ocrstatus = "pass";
+						} else {
+							$fileentry->ocrstatus = "fail";
+						}
+									
+						$fileentry->checked = 1;
+						$fileentry->pagecount = $results['application/json']['pages'];
+						
 					} else {
-						echo "No text\n";
+						$fileentry->ocrstatus = "fail";
+						$fileentry->checked = 0;
 					}
-				},
-				function (RequestException $e) {
-					echo $e->getMessage() . "\n";
-					echo $e->getRequest()->getMethod();
-				}
-			);
-			
-			$promise->wait();
+					
+				
+					// Determine if there is already a record
+					$record = $DB->get_record("local_filescan_files", array('contenthash'=>$results['application/json']['filename']));
+					if ($record) {
+						$fileentry->id = $record->id;
+						$sql = $DB->update_record("local_filescan_files", $fileentry);
+						$sql ? mtrace("Updated record") : mtrace("Could not update record");
+					} else {
+						$sql = $DB->insert_record("local_filescan_files", $fileentry, $returnid=true, $bulk=false);
+						$sql ? mtrace("Inserted record") : mtrace("Could not insert record");
+					}
+					
+			},
+			'rejected' => function ($reason, $index) {
+				echo "Failed!";
+				echo $reason;
+			},
+		]);
 
-        }
-       	
- 	}
+		// Initiate the transfers and create a promise
+		$promise = $pool->promise();
+
+		// Force the pool of requests to complete.
+		$promise->wait();
+
+ 	}       
+
 }
+
+
+
